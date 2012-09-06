@@ -1,0 +1,152 @@
+#include "png_reader.h"
+
+PNG_Reader::PNG_Reader()
+{
+}
+PNG_Reader::~PNG_Reader()
+{
+}
+
+void	PNG_Reader::GetPNGtextureInfo (int color_type, struct gl_texture_t *texinfo)
+{
+	if (color_type == PNG_COLOR_TYPE_GRAY)
+	{
+		texinfo->format = GL_LUMINANCE;
+		texinfo->internalFormat = 1;
+	}
+	else if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+	{
+		texinfo->format = GL_LUMINANCE_ALPHA;
+		texinfo->internalFormat = 2;
+	}
+	else if (color_type == PNG_COLOR_TYPE_RGB)
+	{
+		texinfo->format = GL_RGB;
+		texinfo->internalFormat = 3;
+	}
+	else if (color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+	{
+		texinfo->format = GL_RGBA;
+		texinfo->internalFormat = 4;
+	}
+}
+
+struct gl_texture_t*	PNG_Reader::ReadPNGFromFile (const char *filename)
+{
+	struct	gl_texture_t*	texinfo;
+	png_byte		magic[8];
+	png_structp		png_ptr;
+	png_infop		info_ptr;
+	int bit_depth,		color_type;
+	FILE*			fp = NULL;
+	png_bytep*		row_pointers = NULL;
+	png_uint_32		w, h;
+	int			i;
+
+	fp = fopen (filename, "rb");
+	if (!fp)
+	{
+		fprintf (stderr, "error: couldn't open \"%s\"!\n", filename);
+		return (NULL);
+	}
+	fread (magic, 1, sizeof (magic), fp);
+	if (!png_check_sig (magic, sizeof (magic)))
+	{
+		fprintf (stderr, "error: \"%s\" is not a valid PNG image!\n",
+			filename);
+		fclose (fp);
+		return (NULL);
+	}
+	png_ptr = png_create_read_struct
+					(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if (!png_ptr)
+	{
+		fclose (fp);
+		return (NULL);
+	}
+	info_ptr = png_create_info_struct (png_ptr);
+	if (!info_ptr)
+	{
+		fclose (fp);
+		png_destroy_read_struct (&png_ptr, NULL, NULL);
+		return (NULL);
+	}
+	texinfo = (gl_texture_t *) malloc (sizeof (struct gl_texture_t));
+	if (setjmp (png_jmpbuf (png_ptr)))
+	{
+		fclose (fp);
+		png_destroy_read_struct (&png_ptr, &info_ptr, NULL);
+		if (row_pointers)
+			free (row_pointers);
+		if (texinfo)
+		{
+			if (texinfo->texels)
+				free (texinfo->texels);
+			free (texinfo);
+		}
+		return (NULL);
+	}
+	png_init_io (png_ptr, fp);
+	png_set_sig_bytes (png_ptr, sizeof (magic));
+	png_read_info (png_ptr, info_ptr);
+	bit_depth = png_get_bit_depth (png_ptr, info_ptr);
+	color_type = png_get_color_type (png_ptr, info_ptr);
+	if (color_type == PNG_COLOR_TYPE_PALETTE)
+		png_set_palette_to_rgb (png_ptr);
+	if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+		png_set_gray_1_2_4_to_8 (png_ptr);
+	if (png_get_valid (png_ptr, info_ptr, PNG_INFO_tRNS))
+		png_set_tRNS_to_alpha (png_ptr);
+	if (bit_depth == 16)
+		png_set_strip_16 (png_ptr);
+	else if (bit_depth < 8)
+		png_set_packing (png_ptr);
+	png_read_update_info (png_ptr, info_ptr);
+	png_get_IHDR (png_ptr, info_ptr, &w, &h, &bit_depth,
+			&color_type, NULL, NULL, NULL);
+	texinfo->width = w;
+	texinfo->height = h;
+	GetPNGtextureInfo (color_type, texinfo);
+	texinfo->texels = (GLubyte *)malloc (sizeof (GLubyte) * texinfo->width
+				* texinfo->height * texinfo->internalFormat);
+	row_pointers = (png_bytep *)malloc (sizeof (png_bytep) * texinfo->height);
+	for (i = 0; i < texinfo->height; ++i)
+	{
+		row_pointers[i] = (png_bytep)(texinfo->texels +
+					((texinfo->height - (i + 1)) *
+					texinfo->width * texinfo->internalFormat));
+	}
+	png_read_image (png_ptr, row_pointers);
+	png_read_end (png_ptr, NULL);
+	png_destroy_read_struct (&png_ptr, &info_ptr, NULL);
+	free (row_pointers);
+	fclose (fp);
+	return (texinfo);
+}
+
+GLuint	PNG_Reader::loadPNGTexture (const char *filename)
+{
+	struct gl_texture_t*	png_tex = NULL;
+	GLuint			tex_id = 0;
+	GLint			alignment;
+
+	png_tex = ReadPNGFromFile (filename);
+	if (!(png_tex && png_tex->texels))
+		return -1;
+	glGenTextures (1, &png_tex->id);
+	glBindTexture (GL_TEXTURE_2D, png_tex->id);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glGetIntegerv (GL_UNPACK_ALIGNMENT, &alignment);
+	glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
+	gluBuild2DMipmaps (GL_TEXTURE_2D, png_tex->internalFormat,
+				png_tex->width, png_tex->height,
+				png_tex->format, GL_UNSIGNED_BYTE, png_tex->texels);
+	glPixelStorei (GL_UNPACK_ALIGNMENT, alignment);
+	tex_id = png_tex->id;
+	free (png_tex->texels);
+	free (png_tex);
+	printf("coucou %d\n",tex_id);
+	return (tex_id);
+}
+
